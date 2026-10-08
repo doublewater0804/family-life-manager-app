@@ -8,3 +8,6 @@
 
 /* 繳費日期直接編輯 */
 .paid-date-field{display:flex;align-items:center;gap:7px;font-size:15px;color:#37536a;white-space:nowrap;margin:0}.paid-date-field input[type=date]{width:158px;min-height:42px;padding:7px 9px;border:1px solid #cad8e5;border-radius:9px;background:#fff;font-size:15px;color:#183651}@media(max-width:620px){.paid-date-field{flex-wrap:wrap}.paid-date-field input[type=date]{width:160px}}
+
+/* 2026-10 繳費基本資料維護 */
+.master-tabs{display:flex;gap:8px;background:#eaf0f6;padding:6px;border-radius:12px;margin:18px 0}.master-tabs button{flex:1;background:transparent;border:0;font-weight:700}.master-tabs button.selected{background:#fff;color:#135a99;box-shadow:0 2px 8px #1735531a}.entry .entry-meta{overflow-wrap:anywhere}#customBillName[hidden]{display:none}#entryFields .page-help{background:#edf5ff;border-radius:10px;padding:12px}
