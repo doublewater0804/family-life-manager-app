@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function member(familyId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/families/$(familyId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/families/$(familyId)/members/$(request.auth.uid)).data.active == true;
+    }
+    function admin(familyId) {
+      return member(familyId)
+        && get(/databases/$(database)/documents/families/$(familyId)/members/$(request.auth.uid)).data.role == 'admin';
+    }
+    match /families/{familyId} {
+      allow read: if member(familyId);
+      allow write: if false;
+      match /members/{memberId} {
+        allow read: if member(familyId);
+        allow write: if false;
+      }
+      match /{kind}/{entryId} {
+        allow read: if member(familyId) && kind in ['bills','events','templates'];
+        allow create: if member(familyId) && kind in ['bills','events','templates']
+          && request.resource.data.id == entryId
+          && request.resource.data.scope == 'shared';
+        allow update: if member(familyId) && kind in ['bills','events','templates']
+          && resource.data.id == entryId
+          && request.resource.data.id == entryId
+          && request.resource.data.scope == 'shared';
+        allow delete: if admin(familyId) && kind in ['bills','events','templates'];
+      }
+    }
+    match /users/{userId}/{kind}/{entryId} {
+      allow read: if signedIn() && request.auth.uid == userId && member('home')
+        && kind in ['bills','events','templates'];
+      allow create, update: if signedIn() && request.auth.uid == userId && member('home')
+        && kind in ['bills','events','templates']
+        && request.resource.data.id == entryId
+        && request.resource.data.scope == 'private';
+      allow delete: if signedIn() && request.auth.uid == userId && member('home')
+        && kind in ['bills','events','templates'];
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
