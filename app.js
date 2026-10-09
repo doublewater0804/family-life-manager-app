@@ -1,10 +1,53 @@
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut,updatePassword} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import {getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,onSnapshot,enableIndexedDbPersistence,runTransaction} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import {getFirestore,collection,doc,getDoc,getDocs,setDoc,updateDoc,onSnapshot,getDocFromServer,enableIndexedDbPersistence,runTransaction} from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 const cfg=window.FAMILY_APP_CONFIG,$=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`},uid=()=>crypto.randomUUID(),amount=n=>n===null||n===''||n===undefined?'待填':'NT$ '+Number(n).toLocaleString('zh-TW');
 const S={page:'year',year:new Date().getFullYear(),month:today().slice(0,7),user:null,role:'member',data:{bills:[],events:[],templates:[],members:[]},unsub:[],edit:null,type:null,notice:'',lastGenerated:''};let auth,db,generating=false;
+const C={state:'checking',lastChecked:0,lastError:'',pending:{bills:false,events:false,templates:false},watch:{bills:false,events:false,templates:false},probeId:0,interval:null};
 const family=`families/${cfg.familyId||'home'}`,path=k=>`${family}/${k}`,ref=(k,id)=>doc(db,path(k),id);
+function connectionState(kind,message=''){
+  C.state=kind;C.lastError=message;paintConnection();
+}
+function paintConnection(){
+  const el=$('#firebaseStatus');if(!el)return;
+  const pending=Object.values(C.pending).some(Boolean);
+  const labels={checking:'連線確認中',online:'已連線',offline:'離線',error:'連線異常'};
+  const kind=pending?'pending':C.state;
+  const label=pending?'待同步':(labels[kind]||'連線確認中');
+  const tooltip=kind==='online'?'已成功向 Firestore 伺服器確認存取；目前沒有偵測到待同步寫入':kind==='pending'?'本機有尚未完成的 Firebase 寫入':kind==='offline'?'裝置目前離線或 Firebase 伺服器無法連接':kind==='error'?'Firebase 伺服器確認失敗：'+C.lastError:'正在向 Firebase 伺服器確認連線';
+  el.className='firebase-status status-'+kind;el.textContent='● '+label;
+  el.title=tooltip+(C.lastChecked?'；最近成功確認：'+new Date(C.lastChecked).toLocaleTimeString('zh-TW'):'');
+  el.setAttribute('aria-label',tooltip);
+}
+async function probeConnection(){
+  const seq=++C.probeId;
+  if(!S.user){connectionState('checking');return}
+  if(!navigator.onLine){connectionState('offline');return}
+  connectionState('checking');
+  let timer;
+  try{
+    await Promise.race([
+      getDocFromServer(doc(db,family)),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('伺服器回應逾時')),10000)})
+    ]);
+    if(seq!==C.probeId)return;
+    C.lastChecked=Date.now();connectionState('online');
+  }catch(err){if(seq!==C.probeId)return;connectionState(navigator.onLine?'error':'offline',err?.message||String(err))}
+  finally{clearTimeout(timer)}
+}
+function stopConnectionWatch(){
+  C.probeId++;if(C.interval)clearInterval(C.interval);C.interval=null;
+  C.pending={bills:false,events:false,templates:false};C.watch={bills:false,events:false,templates:false};
+  C.lastChecked=0;connectionState('checking');
+}
+function startConnectionWatch(){
+  stopConnectionWatch();probeConnection();
+  C.interval=setInterval(()=>{if(!document.hidden)probeConnection()},30000);
+}
+window.addEventListener('online',()=>{if(S.user)probeConnection()});
+window.addEventListener('offline',()=>{if(S.user)connectionState('offline')});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&S.user)probeConnection()});
 function notice(msg){S.notice=msg;render()}
 function addMonths(date,n){const [y,m,d]=date.split('-').map(Number),a=new Date(y,m-1+n,1),max=new Date(a.getFullYear(),a.getMonth()+1,0).getDate();return `${a.getFullYear()}-${String(a.getMonth()+1).padStart(2,'0')}-${String(Math.min(d,max)).padStart(2,'0')}`}
 const mon=(date)=>String(date||'').slice(0,7),within=(k,m)=>S.data[k].filter(x=>mon(k==='bills'?x.dueDate:x.date)===m).sort((a,b)=>String(k==='bills'?a.dueDate:a.date).localeCompare(String(k==='bills'?b.dueDate:b.date)));
@@ -25,8 +68,8 @@ const categories=()=>{const saved=S.data.templates.filter(t=>t.kind==='category'
 const catOptions=(selected='')=>[...new Set([...categories(),...(selected?[selected]:[])])].map(n=>[n,n]);
 const templateOptions=(selected='')=>[...billTemplates().filter(t=>t.active!==false),...billTemplates().filter(t=>t.id===selected&&t.active===false)].filter((v,i,a)=>a.findIndex(x=>x.id===v.id)===i).sort((a,b)=>a.name.localeCompare(b.name,'zh-TW')).map(t=>[t.id,t.name]);
 function cycleText(c){return ({0:'一次性',1:'每月',2:'每兩個月',3:'每季',6:'每半年',12:'每年'})[Number(c)]||'自訂'}
-function render(){if(!S.user)return;$('#profile').innerHTML=`<div class="profile-bar"><span>${esc(S.user.email||'')}</span><button data-action="signout">登出</button></div>`;$('#message').innerHTML=S.notice?`<div class="notice">${esc(S.notice)} <button data-action="dismiss">關閉</button></div>`:'';$('#app').innerHTML=({year:yearPage,month:monthPage,templates:templatePage,settings:settingsPage,admin:adminPage}[S.page]||yearPage)();$('#nav').hidden=true}
-function loginScreen(){S.user=null;$('#profile').innerHTML='';$('#nav').hidden=true;$('#app').innerHTML=`<section class="signin surface"><h2>家庭生活管理登入</h2><form id="loginForm"><label>Email</label><input type="email" name="email" autocomplete="username" required><label>密碼</label><input type="password" name="password" autocomplete="current-password" required><button class="primary" type="submit">登入</button></form></section>`}
+function render(){if(!S.user)return;$('#profile').innerHTML=`<div class="profile-bar"><span id="firebaseStatus" role="status" aria-live="polite"></span><span>${esc(S.user.email||'')}</span><button data-action="signout">登出</button></div>`;paintConnection();$('#message').innerHTML=S.notice?`<div class="notice">${esc(S.notice)} <button data-action="dismiss">關閉</button></div>`:'';$('#app').innerHTML=({year:yearPage,month:monthPage,templates:templatePage,settings:settingsPage,admin:adminPage}[S.page]||yearPage)();$('#nav').hidden=true}
+function loginScreen(){stopConnectionWatch();S.user=null;$('#profile').innerHTML='';$('#nav').hidden=true;$('#app').innerHTML=`<section class="signin surface"><h2>家庭生活管理登入</h2><form id="loginForm"><label>Email</label><input type="email" name="email" autocomplete="username" required><label>密碼</label><input type="password" name="password" autocomplete="current-password" required><button class="primary" type="submit">登入</button></form></section>`}
 function input(name,label,type,value='',attrs=''){return `<label for="f_${name}">${label}</label><input id="f_${name}" name="${name}" type="${type}" value="${esc(value)}" ${attrs}>`}
 function select(name,label,options,value){return `<label for="f_${name}">${label}</label><select id="f_${name}" name="${name}">${options.map(([v,t])=>`<option value="${esc(v)}" ${String(v)===String(value)?'selected':''}>${esc(t)}</option>`).join('')}</select>`}
 function inputs(type,x){
@@ -65,7 +108,7 @@ async function save(e){e.preventDefault();const form=new FormData(e.target),now=
  obj.createdAt ||=now;await setDoc(ref(target,obj.id),obj);$('#editor').close();if(S.type==='templates')generate().catch(console.error);
 }
 async function remove(){if(!S.edit||!confirm('確定移到回收區？'))return;await updateDoc(ref(S.type==='categories'?'templates':S.type,S.edit.id),{deleted:true,deletedAt:new Date().toISOString()});$('#editor').close()}
-function listen(){S.unsub.forEach(f=>f());S.unsub=[];for(const k of ['bills','events','templates'])S.unsub.push(onSnapshot(collection(db,path(k)),snap=>{S.data[k]=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>!x.deleted);render();if(k==='templates')generate().catch(console.error)},error));if(S.role==='admin')S.unsub.push(onSnapshot(collection(db,`${family}/members`),snap=>{S.data.members=snap.docs.map(d=>({uid:d.id,...d.data()}));render()},error))}
+function listen(){S.unsub.forEach(f=>f());S.unsub=[];for(const k of ['bills','events','templates'])S.unsub.push(onSnapshot(collection(db,path(k)),{includeMetadataChanges:true},snap=>{C.watch[k]=true;C.pending[k]=snap.metadata.hasPendingWrites;paintConnection();if(snap.metadata.fromCache&&C.state==='online'&&Date.now()-C.lastChecked>30000)probeConnection();if(!snap.metadata.fromCache&&C.state==='checking'){C.lastChecked=Date.now();connectionState('online')}S.data[k]=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>!x.deleted);render();if(k==='templates'&&!snap.metadata.fromCache)generate().catch(console.error)},err=>{connectionState('error',err?.message||String(err));error(err)}));if(S.role==='admin')S.unsub.push(onSnapshot(collection(db,`${family}/members`),snap=>{S.data.members=snap.docs.map(d=>({uid:d.id,...d.data()}));render()},error))}
 function error(e){console.error(e);notice('操作失敗：'+(e?.message||e))}
 async function generate(){if(generating||!S.user)return;generating=true;try{const start=`${Math.min(S.year,Number(today().slice(0,4)))}-01-01`,end=`${Math.max(S.year,Number(today().slice(0,4))+1)}-12-31`;for(const t of S.data.templates){if(t.kind==='category'||t.active===false||!t.startDate||![1,2,3,6,12].includes(Number(t.cycle)))continue;for(let n=0;n<500;n++){const due=addMonths(t.startDate,n*Number(t.cycle));if(due>end)break;if(due<start)continue;const key=`rec_${t.id}_${due}`,docRef=ref('bills',key);await runTransaction(db,async tx=>{const snap=await tx.get(docRef);if(snap.exists())return;const when=new Date().toISOString();tx.set(docRef,{id:key,templateId:t.id,name:t.name,category:t.category||'生活',dueDate:due,amount:t.defaultAmount??null,paid:false,paidDate:'',scope:'shared',createdAt:when,updatedAt:when})})}}}finally{generating=false}}
 function download(data,name,mime){const url=URL.createObjectURL(new Blob([data],{type:mime})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),20000)}
@@ -77,4 +120,4 @@ async function importShared(file){if(!file)return;try{if(file.size>10*1024*1024)
 function csv(){download('\ufeff'+[['項目','金額','期限','狀態','實際繳費日','分類'],...S.data.bills.map(x=>[x.name,x.amount??'',x.dueDate,x.paid?'已繳':'未繳',x.paidDate||'',x.category||''])].map(row=>row.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n'),`家庭繳費_${today()}.csv`,'text/csv;charset=utf-8')}
 async function actions(e){const button=e.target.closest('button');if(!button)return;const d=button.dataset;if(d.nav){S.page=d.nav;render()}else if(d.mastertab){S.masterTab=d.mastertab;render()}else if(d.openmonth){S.month=d.openmonth;S.page='month';render()}else if(d.year){S.year+=Number(d.year);render();generate().catch(console.error)}else if(d.add)edit(d.add);else if(d.edit)edit(d.edit,d.id);else if(d.paid){await updateDoc(ref('bills',d.paid),{paid:true,paidDate:today(),updatedAt:new Date().toISOString()})}else if(d.unpaid){await updateDoc(ref('bills',d.unpaid),{paid:false,paidDate:'',updatedAt:new Date().toISOString()})}else if(d.restore){await updateDoc(ref(d.restore,d.id),{deleted:false,deletedAt:null});button.closest('.entry')?.remove()}else if(d.action){switch(d.action){case 'close':$('#editor').close();break;case 'dismiss':S.notice='';render();break;case 'signout':await signOut(auth);break;case 'export':await exportShared();break;case 'import':$('#importFile')?.click();break;case 'csv':csv();break;case 'privateExport':await exportPrivate();break;case 'privateMigrate':await migrate();break;case 'trash':{const out=$('#trashOutput'),html=[];for(const k of ['bills','events','templates']){const docs=await getDocs(collection(db,path(k)));for(const item of docs.docs)if(item.data().deleted)html.push(`<div class="entry"><span>${esc(item.data().name||item.data().title)} (${k})</span><button data-restore="${k}" data-id="${esc(item.id)}">還原</button></div>`)}out.innerHTML=html.join('')||'<p>回收區目前沒有資料</p>';break}case 'password':{const pwd=prompt('請輸入新的登入密碼（至少 8 碼）');if(pwd){if(pwd.length<8)throw Error('密碼至少 8 碼');await updatePassword(S.user,pwd);alert('密碼已更新')}break}}}}
 document.addEventListener('click',e=>actions(e).catch(error));document.addEventListener('change',e=>{if(e.target.matches('[data-togglepaid]')){const box=e.target;const bill=S.data.bills.find(b=>b.id===box.dataset.togglepaid);box.disabled=true;updateDoc(ref('bills',box.dataset.togglepaid),{paid:box.checked,paidDate:box.checked?(bill?.paidDate||today()):'',updatedAt:new Date().toISOString()}).catch(err=>{box.checked=!box.checked;error(err)}).finally(()=>{box.disabled=false});return}if(e.target.matches('[data-paiddate]')){const field=e.target;const bill=S.data.bills.find(b=>b.id===field.dataset.paiddate);if(!bill||!bill.paid)return;const next=field.value;if(!/^\d{4}-\d{2}-\d{2}$/.test(next)||Number.isNaN(new Date(next+'T12:00:00').getTime())){field.value=bill.paidDate||'';notice('請選擇有效的繳費日期');return}field.disabled=true;updateDoc(ref('bills',field.dataset.paiddate),{paidDate:next,updatedAt:new Date().toISOString()}).catch(err=>{field.value=bill.paidDate||'';error(err)}).finally(()=>{field.disabled=false});return}if(e.target.id==='importFile')importShared(e.target.files[0]);if(e.target.id==='f_templateChoice'){syncBillFields();const t=billTemplates().find(x=>x.id===e.target.value);if(t){$('#f_category').value=t.category||'生活';$('#f_amount').value=t.defaultAmount??''}}});document.addEventListener('submit',e=>{if(e.target.id==='loginForm'){e.preventDefault();const f=new FormData(e.target);signInWithEmailAndPassword(auth,f.get('email'),f.get('password')).catch(error)}if(e.target.id==='entryForm')save(e).catch(error)});$('#deleteEntry').addEventListener('click',()=>remove().catch(error));
-async function start(){if(!cfg?.projectId||!cfg?.apiKey){$('#app').innerHTML='<p>Firebase 設定不完整</p>';return}auth=getAuth(initializeApp(cfg));db=getFirestore();try{await enableIndexedDbPersistence(db)}catch(e){console.warn('離線快取未啟用',e)}onAuthStateChanged(auth,async user=>{S.unsub.forEach(f=>f());S.unsub=[];S.user=user;if(!user){loginScreen();return}try{const m=await getDoc(doc(db,`${family}/members`,user.uid));if(!m.exists()||m.data().active!==true){await signOut(auth);$('#message').innerHTML='<div class="notice">沒有家庭存取權限，請聯絡管理者。</div>';return}S.role=m.data().role==='admin'?'admin':'member';S.page='year';listen();render()}catch(e){error(e)}})}if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(console.warn);start().catch(error);
+async function start(){if(!cfg?.projectId||!cfg?.apiKey){$('#app').innerHTML='<p>Firebase 設定不完整</p>';return}auth=getAuth(initializeApp(cfg));db=getFirestore();try{await enableIndexedDbPersistence(db)}catch(e){console.warn('離線快取未啟用',e)}onAuthStateChanged(auth,async user=>{S.unsub.forEach(f=>f());S.unsub=[];stopConnectionWatch();S.user=user;if(!user){loginScreen();return}try{const m=await getDoc(doc(db,`${family}/members`,user.uid));if(!m.exists()||m.data().active!==true){await signOut(auth);$('#message').innerHTML='<div class="notice">沒有家庭存取權限，請聯絡管理者。</div>';return}S.role=m.data().role==='admin'?'admin':'member';S.page='year';listen();render();startConnectionWatch()}catch(e){error(e)}})}if('serviceWorker'in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(console.warn);start().catch(error);
