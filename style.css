@@ -17,3 +17,6 @@
 
 /* 年度備註：滑鼠與 iPhone/iPad 觸控拖曳高度 */
 .year-note{margin:0 0 18px}.year-note-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.year-note-head .page-help{margin:4px 0 10px}.year-note textarea{display:block;width:100%;min-height:116px;max-height:900px;resize:vertical;white-space:pre-wrap;line-height:1.65;font-size:17px}.note-resize{display:flex;justify-content:flex-end;align-items:center;gap:7px;padding:7px 10px;min-height:38px;color:#506980;font-size:14px;cursor:ns-resize;touch-action:none;user-select:none}.note-resize span{font-size:22px}.year-note-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap}.year-note-actions #noteSaveState{margin-right:auto;color:#657b8e;font-size:14px}@media(max-width:620px){.year-note{padding:14px}.year-note textarea{font-size:16px}.year-note-actions{gap:8px}}
+
+/* R1.1: Strike through only the names of paid bills in month and year views. */
+.bill-is-paid .entry-title,.bill-is-paid .bill-mini-name{text-decoration:line-through;text-decoration-thickness:from-font}
